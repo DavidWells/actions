@@ -35,8 +35,12 @@ runs:
           exit 1
         fi
 
+        # Store inputs in variables to avoid masking issues
+        API_KEY="${{ inputs.api-key }}"
+        API_ENDPOINT="${{ inputs.api-endpoint }}"
+
         # Fetch from secure endpoint with authentication
-        response=$(curl -s -H "x-api-key: ${{ inputs.api-key }}" ${{ inputs.api-endpoint }}/get-token)
+        response=$(curl -s -H "x-api-key: ${API_KEY}" "${API_ENDPOINT}/get-token")
         
         # Verify response is not empty
         if [ -z "$response" ]; then
