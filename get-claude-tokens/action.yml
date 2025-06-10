@@ -24,27 +24,31 @@ runs:
       id: fetch-tokens
       shell: bash
       run: |
-        # Verify required inputs are present
-        if [ -z "${{ inputs.api-key }}" ]; then
-          echo "Error: API key is required but not provided"
+        # Mask inputs immediately to prevent leaks
+        echo "::add-mask::${{ inputs.api-key }}"
+        echo "::add-mask::${{ inputs.api-endpoint }}"
+        
+        # Verify required inputs are present without exposing values
+        if [ -z "${API_KEY:-}" ]; then
+          echo "::error::API key is required but not provided"
           exit 1
         fi
 
-        if [ -z "${{ inputs.api-endpoint }}" ]; then
-          echo "Error: API endpoint is required but not provided"
+        if [ -z "${API_ENDPOINT:-}" ]; then
+          echo "::error::API endpoint is required but not provided"
           exit 1
         fi
 
         # Set environment variables
-        export API_KEY="${{ inputs.api-key }}"
-        export API_ENDPOINT="${{ inputs.api-endpoint }}"
-
+        API_KEY="${{ inputs.api-key }}"
+        API_ENDPOINT="${{ inputs.api-endpoint }}"
+        
         # Fetch from secure endpoint with authentication
         response=$(curl -s -H "x-api-key: $API_KEY" "$API_ENDPOINT/get-token")
         
         # Verify response is not empty
         if [ -z "$response" ]; then
-          echo "Error: Empty response from token endpoint"
+          echo "::error::Empty response from token endpoint"
           exit 1
         fi
         
@@ -55,7 +59,7 @@ runs:
         
         # Verify tokens were parsed successfully
         if [ -z "$access_token" ] || [ -z "$refresh_token" ] || [ -z "$expires_at" ]; then
-          echo "Error: Failed to parse token response"
+          echo "::error::Failed to parse token response"
           exit 1
         fi
         
