@@ -4,9 +4,11 @@ inputs:
   api-key:
     description: 'API key for authentication'
     required: true
+    pattern: '^[A-Za-z0-9-_@]{20,128}$'
   api-endpoint:
     description: 'API endpoint URL'
     required: true
+    pattern: '^https://[^\\s;]+$'
 outputs:
   access-token:
     description: 'Access token'
