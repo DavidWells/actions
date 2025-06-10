@@ -24,6 +24,17 @@ runs:
       id: fetch-tokens
       shell: bash
       run: |
+        # Verify required inputs are present
+        if [ -z "${{ inputs.api-key }}" ]; then
+          echo "Error: API key is required but not provided"
+          exit 1
+        fi
+
+        if [ -z "${{ inputs.api-endpoint }}" ]; then
+          echo "Error: API endpoint is required but not provided"
+          exit 1
+        fi
+
         # Fetch from secure endpoint with authentication
         response=$(curl -s -H "x-api-key: ${{ inputs.api-key }}" ${{ inputs.api-endpoint }}/get-token)
         
