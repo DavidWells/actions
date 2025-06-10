@@ -23,10 +23,13 @@ runs:
     - name: Fetch tokens
       id: fetch-tokens
       shell: bash
+      env:
+        API_KEY: ${{ inputs.api-key }}
+        API_ENDPOINT: ${{ inputs.api-endpoint }}
       run: |
         # Mask inputs immediately to prevent leaks
-        echo "::add-mask::${{ inputs.api-key }}"
-        echo "::add-mask::${{ inputs.api-endpoint }}"
+        echo "::add-mask::$API_KEY"
+        echo "::add-mask::$API_ENDPOINT"
         
         # Verify required inputs are present without exposing values
         if [ -z "${API_KEY:-}" ]; then
@@ -38,10 +41,6 @@ runs:
           echo "::error::API endpoint is required but not provided"
           exit 1
         fi
-
-        # Set environment variables
-        API_KEY="${{ inputs.api-key }}"
-        API_ENDPOINT="${{ inputs.api-endpoint }}"
         
         # Fetch from secure endpoint with authentication
         response=$(curl -s -H "x-api-key: $API_KEY" "$API_ENDPOINT/get-token")
