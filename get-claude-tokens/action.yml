@@ -23,27 +23,24 @@ runs:
     - name: Fetch tokens
       id: fetch-tokens
       shell: bash
-      env:
-        API_KEY: ${{ inputs.api-key }}
-        API_ENDPOINT: ${{ inputs.api-endpoint }}
       run: |
-        # Mask inputs immediately to prevent leaks
-        echo "::add-mask::$API_KEY"
-        echo "::add-mask::$API_ENDPOINT"
+        # Fail fast and handle pipeline errors correctly
+        set -eo pipefail
         
-        # Verify required inputs are present without exposing values
-        if [ -z "${API_KEY:-}" ]; then
+        # Verify required inputs are present
+        if [ -z "${{ inputs.api-key }}" ]; then
           echo "::error::API key is required but not provided"
           exit 1
         fi
 
-        if [ -z "${API_ENDPOINT:-}" ]; then
+        if [ -z "${{ inputs.api-endpoint }}" ]; then
           echo "::error::API endpoint is required but not provided"
           exit 1
         fi
         
         # Fetch from secure endpoint with authentication
-        response=$(curl -s -H "x-api-key: $API_KEY" "$API_ENDPOINT/get-token")
+        # Using -f to fail on server errors (4xx, 5xx)
+        response=$(curl -sf -H "x-api-key: ${{ inputs.api-key }}" "${{ inputs.api-endpoint }}/get-token")
         
         # Verify response is not empty
         if [ -z "$response" ]; then
@@ -57,7 +54,7 @@ runs:
         expires_at=$(echo "$response" | jq -r '.expiresAt')
         
         # Verify tokens were parsed successfully
-        if [ -z "$access_token" ] || [ -z "$refresh_token" ] || [ -z "$expires_at" ]; then
+        if [ -z "$access_token" ] || [ -z "$refresh_token" ] || [ -z "$expires_at" ] || [ "$access_token" == "null" ]; then
           echo "::error::Failed to parse token response"
           exit 1
         fi
