@@ -1,0 +1,55 @@
+name: 'Setup Claude Tokens'
+description: 'Setup Claude tokens for use in actions'
+inputs:
+  api-key:
+    description: 'API key for authentication'
+    required: true
+  api-endpoint:
+    description: 'API endpoint URL'
+    required: true
+outputs:
+  access-token:
+    description: 'Access token'
+    value: ${{ steps.fetch-tokens.outputs.access_token }}
+  refresh-token:
+    description: 'Refresh token'
+    value: ${{ steps.fetch-tokens.outputs.refresh_token }}
+  expires-at:
+    description: 'Token expiration time'
+    value: ${{ steps.fetch-tokens.outputs.expires_at }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Fetch tokens
+      id: fetch-tokens
+      shell: bash
+      run: |
+        # Fetch from secure endpoint with authentication
+        response=$(curl -s -H "x-api-key: ${{ inputs.api-key }}" ${{ inputs.api-endpoint }}/get-token)
+        
+        # Verify response is not empty
+        if [ -z "$response" ]; then
+          echo "Error: Empty response from token endpoint"
+          exit 1
+        fi
+        
+        # Parse and mask the secrets
+        access_token=$(echo "$response" | jq -r '.accessToken')
+        refresh_token=$(echo "$response" | jq -r '.refreshToken')
+        expires_at=$(echo "$response" | jq -r '.expiresAt')
+        
+        # Verify tokens were parsed successfully
+        if [ -z "$access_token" ] || [ -z "$refresh_token" ] || [ -z "$expires_at" ]; then
+          echo "Error: Failed to parse token response"
+          exit 1
+        fi
+        
+        # Mask the secrets
+        echo "::add-mask::$access_token"
+        echo "::add-mask::$refresh_token"
+        echo "::add-mask::$expires_at"
+        
+        # Set outputs
+        echo "access_token=$access_token" >> $GITHUB_OUTPUT
+        echo "refresh_token=$refresh_token" >> $GITHUB_OUTPUT
+        echo "expires_at=$expires_at" >> $GITHUB_OUTPUT
