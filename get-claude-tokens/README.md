@@ -68,3 +68,7 @@ The action will fail if:
 ## License
 
 [Add your license information here]
+
+## Alt approaches
+
+- Alt fetch from ssm https://github.com/sam-goodwin/alchemy/blob/5077705ca594979dd1b669f3a6dae0864bd411e3/.github/actions/setup-alchemy/action.yml#L42C1-L55C93

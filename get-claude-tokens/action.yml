@@ -55,6 +55,13 @@ runs:
         refresh_token=$(echo "$response" | jq -r '.refreshToken')
         expires_at=$(echo "$response" | jq -r '.expiresAt')
         
+        # Echo the raw epoch timestamp
+        echo "Token expires at epoch: $expires_at"
+        
+        # Convert expiry timestamp to human readable format
+        expiry_date=$(date -r $(($expires_at/1000)) "+%Y-%m-%d %H:%M:%S %Z")
+        echo "Token expires at: $expiry_date"
+        
         # Verify tokens were parsed successfully
         if [ -z "$access_token" ] || [ -z "$refresh_token" ] || [ -z "$expires_at" ] || [ "$access_token" == "null" ]; then
           echo "::error::Failed to parse token response"
