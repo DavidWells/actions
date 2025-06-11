@@ -26,7 +26,7 @@ runs:
       id: fetch-tokens
       shell: bash
       run: |
-        # Fail fast and handle pipeline errors correctly
+        # Fetch details
         set -eo pipefail
         
         # Mask inputs immediately to prevent leaks
@@ -107,7 +107,6 @@ runs:
         # Output details
         echo "Details:"
         echo "runId:    $expires_at"
-        echo "runDate:  $(format_date $(($expires_at/1000)))"
 
         # Mask secrets and set outputs
         for secret in "$access_token" "$refresh_token" "$expires_at"; do

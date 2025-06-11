@@ -8,6 +8,7 @@
 # TS map files
 **/*.map
 
+get-claude-tokens/local-test.sh
 # generated content
 public/_data
 public/data
