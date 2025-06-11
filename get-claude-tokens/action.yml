@@ -29,51 +29,94 @@ runs:
         # Fail fast and handle pipeline errors correctly
         set -eo pipefail
         
-        # Verify required inputs are present
-        if [ -z "${{ inputs.api-key }}" ]; then
-          echo "::error::API key is required but not provided"
-          exit 1
+        # Mask inputs immediately to prevent leaks
+        echo "::add-mask::${{ inputs.api-key }}"
+        echo "::add-mask::${{ inputs.api-endpoint }}"
+
+        API_KEY="${{ inputs.api-key }}"
+        API_ENDPOINT="${{ inputs.api-endpoint }}"
+
+        # Validate inputs
+        if [ -z "$API_KEY" ] || [ -z "$API_ENDPOINT" ]; then
+            echo "::error::API key and endpoint are required"
+            exit 1
         fi
 
-        if [ -z "${{ inputs.api-endpoint }}" ]; then
-          echo "::error::API endpoint is required but not provided"
-          exit 1
+        if [[ ! "$API_ENDPOINT" == https://* ]]; then
+            echo "::error::Invalid API endpoint format. Must be a valid HTTPS URL"
+            exit 1
         fi
-        
+
         # Fetch from secure endpoint with authentication
-        # Using -f to fail on server errors (4xx, 5xx)
-        response=$(curl -sf -H "x-api-key: ${{ inputs.api-key }}" "${{ inputs.api-endpoint }}/get-token")
-        
-        # Verify response is not empty
-        if [ -z "$response" ]; then
-          echo "::error::Empty response from token endpoint"
-          exit 1
-        fi
-        
-        # Parse and mask the secrets
-        access_token=$(echo "$response" | jq -r '.accessToken')
-        refresh_token=$(echo "$response" | jq -r '.refreshToken')
-        expires_at=$(echo "$response" | jq -r '.expiresAt')
-        
-        # Echo the raw epoch timestamp
-        echo "Token expires at epoch: $expires_at"
-        
-        # Convert expiry timestamp to human readable format
-        expiry_date=$(date -d "@$(($expires_at/1000))" "+%Y-%m-%d %H:%M:%S %Z")
-        echo "Token expires at: $expiry_date"
-        
+        max_retries=3
+        retry_count=0
+        retry_delay=2
+
+        while [ $retry_count -lt $max_retries ]; do
+            echo "Attempt $((retry_count + 1)) of $max_retries"
+            
+            # Make the request and capture both stdout and stderr
+            response=$(curl -sf -w "\n%{http_code}" -H "x-api-key: $API_KEY" "$API_ENDPOINT/get-token" 2>&1)
+            curl_exit_code=$?
+            
+            # Extract status code and response body
+            status_code=$(echo "$response" | tail -n1)
+            response_body=$(echo "$response" | sed '$d')
+            
+            echo "Received status code: $status_code"
+            
+            # Handle different status codes
+            case $status_code in
+                200)
+                    echo "Success! Received 200 response"
+                    break
+                    ;;
+                404|410)
+                    echo "::error::Token error ($status_code): $([ "$status_code" = "404" ] && echo "No token found" || echo "Token has expired")"
+                    exit 1
+                    ;;
+                5*)
+                    retry_count=$((retry_count + 1))
+                    if [ $retry_count -lt $max_retries ]; then
+                        echo "Server error ($status_code). Retrying in ${retry_delay}s... (Attempt $retry_count of $max_retries)"
+                        sleep $retry_delay
+                        retry_delay=$((retry_delay * 2))
+                    else
+                        echo "::error::Max retries reached. Last status code: $status_code"
+                        exit 1
+                    fi
+                    ;;
+                *)
+                    echo "::error::Unexpected status code: $status_code"
+                    exit 1
+                    ;;
+            esac
+        done
+
+        # Parse response
+        access_token=$(echo "$response_body" | jq -r '.accessToken')
+        refresh_token=$(echo "$response_body" | jq -r '.refreshToken')
+        expires_at=$(echo "$response_body" | jq -r '.expiresAt')
+
         # Verify tokens were parsed successfully
-        if [ -z "$access_token" ] || [ -z "$refresh_token" ] || [ -z "$expires_at" ] || [ "$access_token" == "null" ]; then
-          echo "::error::Failed to parse token response"
-          exit 1
+        if [ -z "$access_token" ] || [ -z "$refresh_token" ] || [ -z "$expires_at" ] || [ "$access_token" = "null" ]; then
+            echo "::error::Failed to parse token response"
+            exit 1
         fi
-        
-        # Mask the secrets
-        echo "::add-mask::$access_token"
-        echo "::add-mask::$refresh_token"
-        echo "::add-mask::$expires_at"
-        
+
+        # Output details
+        echo "Details:"
+        echo "runId:    $expires_at"
+        echo "runDate:  $(format_date $(($expires_at/1000)))"
+
+        # Mask secrets and set outputs
+        for secret in "$access_token" "$refresh_token" "$expires_at"; do
+            echo "::add-mask::$secret"
+        done
+
         # Set outputs
-        echo "access_token=$access_token" >> $GITHUB_OUTPUT
-        echo "refresh_token=$refresh_token" >> $GITHUB_OUTPUT
-        echo "expires_at=$expires_at" >> $GITHUB_OUTPUT
+        {
+            echo "access_token=$access_token"
+            echo "refresh_token=$refresh_token"
+            echo "expires_at=$expires_at"
+        } >> "$GITHUB_OUTPUT"
