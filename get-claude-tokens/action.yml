@@ -59,7 +59,7 @@ runs:
         echo "Token expires at epoch: $expires_at"
         
         # Convert expiry timestamp to human readable format
-        expiry_date=$(date -r $(($expires_at/1000)) "+%Y-%m-%d %H:%M:%S %Z")
+        expiry_date=$(date -d "@$(($expires_at/1000))" "+%Y-%m-%d %H:%M:%S %Z")
         echo "Token expires at: $expiry_date"
         
         # Verify tokens were parsed successfully
