@@ -1,8 +1,10 @@
 name: Claude Code Review
 
+# ref SonicGarden/workflows/.github/workflows/claude-review.yml@main
+
 # **How to use:**
 # ```yaml
-# uses: SonicGarden/workflows/.github/workflows/claude-review.yml@main
+# uses: davidwells/actions/.github/workflows/claude-review.yml@master
 # with:
 #   guideline_files: |
 #     doc/agent/code-review.md
