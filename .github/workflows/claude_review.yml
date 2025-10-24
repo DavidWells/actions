@@ -1,0 +1,359 @@
+name: Claude Code Review
+
+# **How to use:**
+# ```yaml
+# uses: SonicGarden/workflows/.github/workflows/claude-review.yml@main
+# with:
+#   guideline_files: |
+#     doc/agent/code-review.md
+#     doc/agent/code-review-rails.md
+#   minimum_changed_lines: 10
+# secrets:
+#   claude_oauth_token: ${{ secrets.CLAUDE_OAUTH_TOKEN }}
+#   anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+# ```
+
+# **Parameters:**
+# - `guideline_files`: A list of paths to code review guideline files (separated by newlines)
+# - `model`: The Claude model to use (optional, defaults to Sonnet 4)
+# - `minimum_changed_lines`: Minimum number of changed lines since the last review (default: 0, if 0 it will always be performed)
+# - `runs_on`: Specify the GitHub Actions runner (default: `linux-arm64-default`)
+
+# **features:**
+# - Automatic review of PR changes in Japanese
+# - Specific improvement suggestions with inline comments
+# - Review from various perspectives such as code quality, security, and performance
+# - Automatically delete existing Claude bot comments to prevent duplication
+# - Skip review if `[skip review]` is included in the commit message
+
+on:
+  workflow_call:
+    inputs:
+      guideline_files:
+        description: 'Paths to guideline files for code review (newline-separated)'
+        required: true
+        type: string
+      model:
+        description: 'Claude model to use (empty for default Sonnet 4)'
+        required: false
+        type: string
+        default: ''
+      minimum_changed_lines:
+        description: 'Minimum number of changed lines since last review to trigger review (0 means always run)'
+        required: false
+        type: number
+        default: 0
+      runs_on:
+        description: 'GitHub Actions runner to use'
+        required: false
+        type: string
+        default: 'linux-arm64-default'
+    secrets:
+      claude_oauth_token:
+        required: false
+        description: Claude OAuth token for code review
+      anthropic_api_key:
+        required: false
+        description: Anthropic API key for code review
+
+jobs:
+  claude-review:
+    runs-on: ${{ inputs.runs_on }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      pull-requests: write
+      issues: write
+      id-token: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v5
+        with:
+          token: ${{ github.token }}
+          fetch-depth: 0
+
+      - name: Check for skip review message
+        id: check-skip-message
+        if: github.event_name == 'pull_request'
+        run: |
+          COMMIT_MESSAGE=$(git log -1 --pretty=%B ${{ github.event.pull_request.head.sha }})
+          echo "Latest commit message: $COMMIT_MESSAGE"
+          if [[ "$COMMIT_MESSAGE" == *"[skip review]"* ]]; then
+            echo "skip=true" >> $GITHUB_OUTPUT
+            echo "Skipping review due to [skip review] in commit message"
+          else
+            echo "skip=false" >> $GITHUB_OUTPUT
+            echo "Proceeding with review"
+          fi
+
+      - name: Check minimum changed lines since last review
+        id: check-minimum-lines
+        if: github.event_name == 'pull_request' && steps.check-skip-message.outputs.skip != 'true' && ${{ inputs.minimum_changed_lines }} != 0
+        continue-on-error: true
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          echo "Checking skip conditions..."
+
+          # Check for existing Claude Code Review
+          claude_reviews=$(gh pr view ${{ github.event.pull_request.number }} --json reviews --jq '.reviews[] | select(.author.login == "claude")')
+          existing_review=$(echo "$claude_reviews" | jq -r '.id' | head -1)
+
+          if [ -z "$existing_review" ]; then
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+            echo "skip_reason=No existing claude review found" >> $GITHUB_OUTPUT
+            exit 0
+          be
+
+          # Identify when the last Claude review was conducted
+          last_review_time=$(echo "$claude_reviews" | jq -r '.submittedAt' | sort -r | head -1)
+          echo "Last review time: $last_review_time"
+
+          if [ -z "$last_review_time" ]; then
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+            echo "skip_reason=No previous claude review found" >> $GITHUB_OUTPUT
+            exit 0
+          be
+
+          # Identify the commit closest to the last review time
+          last_review_commit=$(git log --until="$last_review_time" --format="%H" -1 2>/dev/null || echo "")
+          echo "Last review commit: $last_review_commit"
+
+          if [ -z "$last_review_commit" ]; then
+            # Fallback: If no commit from the previous review is found, use the line count for the entire PR
+            echo "Warning: Failed to find last review commit. Using entire PR diff for line count calculation."
+            changed_lines=$(gh pr diff ${{ github.event.pull_request.number }} --numstat | awk '{sum+=$1+$2} END {print sum+0}')
+          else
+            # Calculate the exact line difference from the last review to the current
+            changed_lines=$(git diff --numstat "$last_review_commit"..HEAD 2>/dev/null | awk '{sum+=$1+$2} END {print sum+0}')
+
+            # Fallback if git diff encounters an error
+            if [ $? -ne 0 ] || [ -z "$changed_lines" ]; then
+              echo "Warning: git diff failed or returned empty result. Using entire PR diff for line count calculation."
+              changed_lines=$(gh pr diff ${{ github.event.pull_request.number }} --numstat | awk '{sum+=$1+$2} END {print sum+0}')
+            be
+          be
+
+          if [ "$changed_lines" -le "${{ inputs.minimum_changed_lines }}" ]; then
+            echo "should_skip=true" >> $GITHUB_OUTPUT
+            echo "skip_reason=Changed lines ($changed_lines) is below minimum (${{ inputs.minimum_changed_lines }})" >> $GITHUB_OUTPUT
+          else
+            echo "should_skip=false" >> $GITHUB_OUTPUT
+            echo "skip_reason=Changed lines ($changed_lines) exceeds minimum (${{ inputs.minimum_changed_lines }})" >> $GITHUB_OUTPUT
+          be
+
+      # Delete existing PR comments by Claude bot
+      - uses: aki77/delete-pr-comments-action@v3
+        if: steps.check-skip-message.outputs.skip != 'true' && steps.check-minimum-lines.outputs.should_skip != 'true'
+        with:
+          token: ${{ github.token }}
+          usernames: claude[bot]
+          noReply: "true"
+          onlyNotMinimized: 'true'
+          includeOverallReviewComments: "true"
+
+      - name: Get existing Claude comments
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const query = `query($owner: String!, $repo: String!, $number: Int!) {
+              repository(owner: $owner, name: $repo) {
+                pullRequest(number: $number) {
+                  reviewThreads(first: 100) {
+                    nodes {
+                      id
+                      isResolved
+                      comments(last: 20) {
+                        nodes {
+                          author {
+                            login
+                          }
+                          body
+                          path
+                          line
+                          createdAt
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }`;
+
+            const variables = {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              number: context.issue.number
+            };
+
+            const result = await github.graphql(query, variables);
+
+            // Extract only Claude[bot] comments (from latest)
+            const claudeComments = result.repository.pullRequest.reviewThreads.nodes
+              .filter(thread =>
+                thread.comments.nodes.length > 0 &&
+                thread.comments.nodes[0].author.login === 'claude'
+              )
+              .map(thread => ({
+                threadId: thread.id,
+                isResolved: thread.isResolved,
+                path: thread.comments.nodes[0].path,
+                line: thread.comments.nodes[0].line,
+                body: thread.comments.nodes[0].body,
+                createdAt: thread.comments.nodes[0].createdAt
+              }));
+
+            console.debug(claudeComments);
+            require('fs').writeFileSync('.existing_claude_comments.json', JSON.stringify(claudeComments, null, 2));
+
+            console.log(`Found ${claudeComments.length} Claude comments`);
+
+      - name: Read guideline files
+        id: read-guideline
+        if: steps.check-skip-message.outputs.skip != 'true' && steps.check-minimum-lines.outputs.should_skip != 'true'
+        run: |
+          echo "guideline_content<<EOF" >> $GITHUB_OUTPUT
+
+          # Process each guideline file (newline-separated)
+          echo "${{ inputs.guideline_files }}" | while IFS= read -r guideline_file; do
+            # Skip empty lines
+            if [ -z "$guideline_file" ]; then
+              continue
+            fi
+
+            if [ -f "$guideline_file" ]; then
+              echo "Reading guideline file: $guideline_file"
+              cat "$guideline_file" >> $GITHUB_OUTPUT
+              echo "" >> $GITHUB_OUTPUT  # Add newline between files
+            else
+              echo "Warning: Guideline file not found: $guideline_file" >&2
+            fi
+          done
+
+          echo "EOF" >> $GITHUB_OUTPUT
+          echo "Guideline files processed"
+
+      - name: Run Claude Code Review
+        id: claude-review
+        if: steps.check-skip-message.outputs.skip != 'true' && steps.check-minimum-lines.outputs.should_skip != 'true'
+        uses: anthropics/claude-code-action@v1
+        env:
+          # NOTE: The default value of 25000 causes frequent token shortage cases in mcp__github__get_pull_request_files, so it is set to 50000
+          # SEE: https://docs.anthropic.com/ja/docs/claude-code/settings#%E7%92%B0%E5%A2%83%E5%A4%89%E6%95%B0
+          MAX_MCP_OUTPUT_TOKENS: 50000
+        with:
+          claude_code_oauth_token: ${{ secrets.claude_oauth_token }}
+          anthropic_api_key: ${{ secrets.claude_oauth_token != '' && '' || secrets.anthropic_api_key }}
+          # Direct prompt for automated review (no @claude mention needed)
+          prompt: |
+            REPO: ${{ github.repository }}
+            PR NUMBER: ${{ github.event.pull_request.number || github.event.issue.number }}
+            TODAY: ${{ github.event.pull_request.updated_at || github.event.issue.updated_at }}
+
+            ${{ steps.read-guideline.outputs.guideline_content }}
+
+            # Review instructions
+
+            Conduct a PR review.
+
+            **IMPORTANT: Please provide all feedback and comments in English.**
+
+            **Guiding principles of review:**
+            - Please review based on the current state of this PR (latest commit)
+            - Interpret the changes shown in the diff appropriately and point out problems in the current code
+            - Don't point out code that no longer exists or has been fixed in a previous commit
+
+            **API Validation Rules:**
+            - Always verify accuracy before reporting framework or library APIs using the context7 MCP tools (`mcp__context7__resolve-library-id` and `mcp__context7__get-library-docs`)
+            - If you can't verify, avoid speculation and include only verifiable facts in your review comments
+            - This prevents reviews with false information (hallucination)
+
+            **Review Instructions:**
+            1. Start the review with `mcp__github__create_pending_pull_request_review`
+            2. `mcp__github__get_pull_request_files` gets a list of files included in the current PR
+            3. Check the changes with `mcp__github__get_pull_request_diff`
+            4. For modified files, load the actual file (checked out) to see the exact line number
+            5. Add specific feedback inline with `mcp__github__add_comment_to_pending_review`
+               - **IMPORTANT**: Make sure the file exists in the current PR before adding a comment
+               - **IMPORTANT**: Use line numbers from the actual file, not line numbers from the diff
+               - Review based on the latest version of the file present
+               - **IMPORTANT**: Check `.existing_claude_comments.json` and skip posting if there are duplicate comments on the same line
+               - **IMPORTANT**: If you want to suggest a code fix, please use GitHub's suggestion feature.
+
+               **How ​​to specify API parameters:**
+               - Single line fix:
+                 - `line`: target line number (required)
+                 - `subjectType`: "LINE"
+                 - `body`: "Suggested fix\n```suggestion\nImproved code\n```"
+
+               - Modify multiple lines (range):
+                 - `startLine`: The starting line number of the comment range (required)
+                 - `line`: End line number of the comment range (required, value equal to or greater than startLine)
+                 - `startSide`: "RIGHT" (for added lines)
+                 - `side`: "RIGHT" (for added rows)
+                 - `subjectType`: "LINE"
+                 - `body`: "Suggested fix\n```suggestion\nReplaced code (any number of lines)\n```"
+
+               - **important**:
+                 - If you want to comment multiple lines, be sure to specify both `startLine` and `line`.
+                 - The range from `startLine` to `line` is highlighted, and the entire range is replaced with the suggestion content.
+                 - The number of suggestion lines can be different from the original range (deletions and additions are possible)
+               - When suggesting a fix in a comment, surround it with ````suggestion ```
+            6. Send the event type "COMMENT" to `mcp__github__submit_pending_pull_request_review`
+
+            **Important limitations:**
+            - **You can't comment directly on the deleted line (`-`) itself** (GitHub API restriction)
+            - When a deletion is detected, comment on a valid line near the deletion.
+            - If the file is completely deleted, please comment in the PR review.
+            - Avoid pointing out code that no longer exists (code that was added and then removed in a previous commit)
+
+            **Review comment type and placement:**
+
+            1. **Additional code issues** (comment the `+` line):
+               - "Using unescaped user input is a security risk"
+               - "Please add error handling to this method"
+
+            2. **Problems with deletion** (comment valid lines near the deletion):
+               - "Input validation has been removed above, but is still necessary for security purposes"
+               - "It seems like some important error handling has been removed. Is this intentional?"
+
+            3. **Comments to avoid**:
+               - Pointing out methods that no longer exist
+               - Repeating what was fixed in a previous commit
+               - Pointing out outdated code that is not reflected in the current code
+
+            **Removal Code Review Criteria:**
+            - Check before removing security measures (sanitize, escape processing, etc.)
+            - Check the removal of error handling and validation
+            - Check whether the deletion of test code is consistent with the deletion of the corresponding function.
+            - Simple refactoring and deleting unnecessary code is fine.
+
+            Please provide constructive and specific suggestions for improvement, and include inline comments for line-specific issues and an overall summary when submitting your review.
+
+            **Note: Regarding the use of the suggestion function**
+            When suggesting code changes, be sure to use GitHub's suggestion feature to make it easy for developers to apply the changes.
+
+            Single line example:
+            ```suggestion
+            Improved lines of code go here
+            ```
+
+            Multi-line example (specify range with startLine and line):
+            ```suggestion
+            Improved multi-line
+            Code here
+            Describe
+            ```
+
+            This allows developers to apply the suggestion by simply clicking the "Commit suggestion" button.
+
+            **About Positive Feedback:**
+            - **Be sparing inline:** Limit inline mentions to notable points, such as particularly good design or original implementations that serve as inspiration for other developers.
+            - **Mention in summary comment:** Please summarize and describe the overall good points and positive thoughts about the PR as a whole in the "Summary Comment" when submitting your review.
+
+          use_sticky_comment: true
+          claude_args: |
+            ${{ inputs.model != '' && format('--model {0}', inputs.model) || '' }}
+            --allowedTools "mcp__github_comment__update_claude_comment,mcp__github__create_pending_pull_request_review,mcp__github__add_comment_to_pending_review,mcp__github__submit_pending_pull_request_review,mcp__github__get_pull_request_diff,mcp__github__get_pull_request_files,mcp__context7__resolve-library-id,mcp__context7__get-library-docs"
+            --mcp-config '{"mcpServers": {"context7": {"type": "sse", "url": "https://mcp.context7.com/sse"}}}'
