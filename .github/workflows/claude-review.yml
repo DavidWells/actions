@@ -106,7 +106,7 @@ jobs:
             echo "should_skip=false" >> $GITHUB_OUTPUT
             echo "skip_reason=No existing claude review found" >> $GITHUB_OUTPUT
             exit 0
-          be
+          fi
 
           # Identify when the last Claude review was conducted
           last_review_time=$(echo "$claude_reviews" | jq -r '.submittedAt' | sort -r | head -1)
@@ -116,7 +116,7 @@ jobs:
             echo "should_skip=false" >> $GITHUB_OUTPUT
             echo "skip_reason=No previous claude review found" >> $GITHUB_OUTPUT
             exit 0
-          be
+          fi
 
           # Identify the commit closest to the last review time
           last_review_commit=$(git log --until="$last_review_time" --format="%H" -1 2>/dev/null || echo "")
@@ -134,8 +134,8 @@ jobs:
             if [ $? -ne 0 ] || [ -z "$changed_lines" ]; then
               echo "Warning: git diff failed or returned empty result. Using entire PR diff for line count calculation."
               changed_lines=$(gh pr diff ${{ github.event.pull_request.number }} --numstat | awk '{sum+=$1+$2} END {print sum+0}')
-            be
-          be
+            fi
+          fi
 
           if [ "$changed_lines" -le "${{ inputs.minimum_changed_lines }}" ]; then
             echo "should_skip=true" >> $GITHUB_OUTPUT
@@ -143,7 +143,7 @@ jobs:
           else
             echo "should_skip=false" >> $GITHUB_OUTPUT
             echo "skip_reason=Changed lines ($changed_lines) exceeds minimum (${{ inputs.minimum_changed_lines }})" >> $GITHUB_OUTPUT
-          be
+          fi
 
       # Delete existing PR comments by Claude bot
       - uses: aki77/delete-pr-comments-action@v3
